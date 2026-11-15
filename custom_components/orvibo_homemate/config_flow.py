@@ -17,7 +17,12 @@ from .const import (
     DEFAULT_PORT,
     DOMAIN,
 )
-from .homemate import HomeMateAuthError, HomeMateClient, HomeMateError
+from .homemate import (
+    HomeMateAuthError,
+    HomeMateClient,
+    HomeMateError,
+    build_ssl_context,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,9 +48,12 @@ class OrviboHomeMateConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(user_input[CONF_USERNAME].lower())
             self._abort_if_unique_id_configured()
 
+            # Build the TLS context off the event loop (blocking file I/O).
+            ctx = await self.hass.async_add_executor_job(build_ssl_context, False)
             client = HomeMateClient(
                 user_input[CONF_USERNAME], user_input[CONF_PASSWORD],
                 host=user_input[CONF_HOST], port=user_input[CONF_PORT],
+                ssl_context=ctx,
             )
             try:
                 await client.connect()

@@ -71,37 +71,142 @@ _LOGGER = logging.getLogger(__name__)
 # Mutual TLS
 # --------------------------------------------------------------------------
 # The ORVIBO server requires the client to present a certificate (mutual TLS)
-# and the app pins the server to ORVIBO's own CA. Both the client keystore
-# (res/raw/client.bks) and the trust store (res/raw/clienttrust.bks) ship in
-# the app with the password "ksund76kN22_wQ"; they are extracted to PEM here.
-# The client certificate is a shared credential embedded in every copy of the
-# public app -- it identifies "the HomeMate app", not an individual user.
-_CERT_DIR = os.path.join(os.path.dirname(__file__), "certs")
-CLIENT_CERT = os.path.join(_CERT_DIR, "client_cert.pem")
-CLIENT_KEY = os.path.join(_CERT_DIR, "client_key.pem")
-SERVER_CA = os.path.join(_CERT_DIR, "server_ca.pem")
+# and the app pins the server to ORVIBO's own CA. The client keystore and trust
+# store ship in the app (res/raw/client.bks, clienttrust.bks, password
+# "ksund76kN22_wQ") and are extracted to PEM. The client certificate is a shared
+# credential embedded in every copy of the public app -- it identifies "the
+# HomeMate app", not an individual user. It is embedded here (rather than loaded
+# from a file) so the integration keeps working regardless of how it was copied.
+_CLIENT_CERT_PEM = """-----BEGIN CERTIFICATE-----
+MIIDnzCCAoegAwIBAgIBCTANBgkqhkiG9w0BAQsFADCBojELMAkGA1UEBhMCQ04x
+EjAQBgNVBAgMCUd1YW5nRG9uZzERMA8GA1UEBwwIU2hlblpoZW4xIjAgBgNVBAoM
+GU9SVklCTyBUZWNobm9sb2d5IENvLixMdGQxCzAJBgNVBAsMAklUMRUwEwYDVQQD
+DAwqLm9ydmliby5jb20xJDAiBgkqhkiG9w0BCQEWFWhlaGFpbGlhbmdAb3J2aWJv
+LmNvbTAeFw0xODA4MjIwNjI4MTdaFw00ODA4MTQwNjI4MTdaMGkxCzAJBgNVBAYT
+AkNOMRIwEAYDVQQIEwlHdWFuZ0RvbmcxIjAgBgNVBAoTGU9SVklCTyBUZWNobm9s
+b2d5IENvLixMdGQxCzAJBgNVBAsTAklUMRUwEwYDVQQDDAwqLm9ydmliby5jb20w
+ggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQD44AVAMBk75aQ+tIjx+G3L
+yv0Ckg6MuR1hDZfKLpq/dRkxZP0TZ7UL7oIbK590NUgcJto2njxU3EhtFD4a/Uzg
+RNJWXgyQnrr5V+Uksp8tHLU5fs0W1U9k82IOCfFBawiad8i/sONCmEVXUaVY9mLr
+5tMpTrx1llqEFisI9Opf81gJRc1yE5CjUCnK3ENmAqKOdPPADgzEPuv69Jc/rL2M
+XLFLfLAsHxZOf5pFftTE5X5/r00lFxUW+4lmxnSrDolYHUh3Egm+ZYxJgq+ycI29
+8mgY2bAvUsntx0yn2AKAaUVaktPVCboKnLIKP7J9j9EaVuwvwN0cwD1jWv3KsuhR
+AgMBAAGjGDAWMBQGBCoDgxwEDAwKMDAwMDAwMTQ0NDANBgkqhkiG9w0BAQsFAAOC
+AQEAXamhyBvmizbbNn11EVyv3vk+o8fYHEl/oAbBTUp3+6XezKWfbt9G/vdwMtLh
+GcoU1UCOK+gNTP7B+8hYrxwwob8CDMBtsqq857+RXkw4hUw5RP0IGoJW/1oEaJwQ
+1XtTNCbBj3CNKtb7Uu/b7WyuY7gy9VcV5c4bK5g59x+z3SMZFwVPs97T+rIs17+E
+F7CXjNlahu7xtvyuItxTDyW9Nj9FwTjOBf7SyXXuMyS3emY39pwy8654gcSLr5IY
+JXQc5tBirT3xggBy8AsSuBYUol7QJtV0Ehn09wMqW/QBPctoHjKeP0JNVD3sne8S
+0yFmUl6/Oa1p03G8Xf4xG5dfhg==
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIEGTCCAwGgAwIBAgIJAMgC1Osv+BiBMA0GCSqGSIb3DQEBCwUAMIGiMQswCQYD
+VQQGEwJDTjESMBAGA1UECAwJR3VhbmdEb25nMREwDwYDVQQHDAhTaGVuWmhlbjEi
+MCAGA1UECgwZT1JWSUJPIFRlY2hub2xvZ3kgQ28uLEx0ZDELMAkGA1UECwwCSVQx
+FTATBgNVBAMMDCoub3J2aWJvLmNvbTEkMCIGCSqGSIb3DQEJARYVaGVoYWlsaWFu
+Z0BvcnZpYm8uY29tMB4XDTE4MDgyMjA2MjYzMFoXDTQ4MDgxNDA2MjYzMFowgaIx
+CzAJBgNVBAYTAkNOMRIwEAYDVQQIDAlHdWFuZ0RvbmcxETAPBgNVBAcMCFNoZW5a
+aGVuMSIwIAYDVQQKDBlPUlZJQk8gVGVjaG5vbG9neSBDby4sTHRkMQswCQYDVQQL
+DAJJVDEVMBMGA1UEAwwMKi5vcnZpYm8uY29tMSQwIgYJKoZIhvcNAQkBFhVoZWhh
+aWxpYW5nQG9ydmliby5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
+AQC27ZN/n9WSI7Qr3zg8XEx5tIbBU+S5kbEBKJpRPw99TN3ljiP3qgAEmnZK4FYa
+VSMdlIekyhUDXAQXRR0tN6STB2McIWbciZ/PnsyauVTB9vjcSXTRq2gsUcmfCM8q
+nHREaa4T9fbuCBBN4v9xmm7OuyKC6Q1BvCjzOqGAMCQRtyXMZwC1t+mVKhYa97b/
+T2yTjTwkrh72S7xkPv23OXnNAaVZUY6QyqFK62dE0eTIobrfDeRm51yRtr/SmMoW
+X8SwRG6JK1usOj4bSTAA4fftNz8yB+jopNN+Sg1ZRG9SJuk/dxRESNwNrMMOU0o6
+aoEJwWFB5jTxjBz7KhBG5vbjAgMBAAGjUDBOMB0GA1UdDgQWBBTS1g5JoJjqLP4B
+elFJY/He3L/7ojAfBgNVHSMEGDAWgBTS1g5JoJjqLP4BelFJY/He3L/7ojAMBgNV
+HRMEBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBf7oyDUparavLZhPdn7UwfmxnU
+gA+PK4nXKX7rqg8DRzeLkOOBGwxUzUJlxigtSI4+TIfqKVSt/4WKo0R7Ivpg4yKz
+lxDWPxVVncfMBxr/AZEVNFlVyVXWUekEoBckIyr5zRjPK3PfAtnd7jAQwYdsl2zG
+8zsJag4tbw7dyWFbQtezY7ZPx4c+mEPTwKbB5AAlidCOO+9axmhxliuoSy67CJER
+dZxEx2poqHRLDFbyir+C1OBPkXnTCHbP/eGiABhizmt7nkQMAyrdvc69PcgmhYhA
+YIowNqpmqRFbVwL7DHMzJ09vDCsZufD0TvR1DMDO3rGB/NlUQ6vktk4zg/UE
+-----END CERTIFICATE-----
+"""
+_CLIENT_KEY_PEM = """-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQD44AVAMBk75aQ+
+tIjx+G3Lyv0Ckg6MuR1hDZfKLpq/dRkxZP0TZ7UL7oIbK590NUgcJto2njxU3Eht
+FD4a/UzgRNJWXgyQnrr5V+Uksp8tHLU5fs0W1U9k82IOCfFBawiad8i/sONCmEVX
+UaVY9mLr5tMpTrx1llqEFisI9Opf81gJRc1yE5CjUCnK3ENmAqKOdPPADgzEPuv6
+9Jc/rL2MXLFLfLAsHxZOf5pFftTE5X5/r00lFxUW+4lmxnSrDolYHUh3Egm+ZYxJ
+gq+ycI298mgY2bAvUsntx0yn2AKAaUVaktPVCboKnLIKP7J9j9EaVuwvwN0cwD1j
+Wv3KsuhRAgMBAAECggEBAPZO2EN/lunFy/jXOhWoVhn0itTpcobpil8MUeaimzrT
+DJzrIuD6qZ7mbVOwp74eIYDjHuIhVvpxjSiPeSvC9zuaQUWDDRJwVgICcGESeyDt
+oZoGmbl4YXw6uBfG1UN2R+yAkmjNCw5Un4Pc5TUXnC12pBPkvfXuWSUSv4K8yd0s
+iJES9ccIym1AHVwdtrepQgxLCRK3k5OQ+M6yk+NCuVNlooUTvpgUEl93eG+/OUtD
+CUnOZAnKXzTTjatIgbaA2o67OFf/TYGRaCWpAYD8S2rDGJh8l1CcsfHTeUxKPSld
+PLuhxq8ZzZHS8aXkFO7aMC1bqyOof7W2NBa5tahBADECgYEA/6mqJvbPObvaRC5I
+xEWVhfWHbbazy8mjnjsB7XAwkG71PhntzYjpMKwaES++qNX0GIUSgVa3luDqOew4
+zwo1Vwc5iOHgKZNo2KLbqblMahcPMHXt3xYxxRa4oe41AVkTzTV+q3FGNB8h09gg
+9BwTAVjs6I3UtICaDPkaFhDi0k0CgYEA+TQQTzo1OpnKkD5AuAgX+mo/W3FKqZNB
+PussQBDT2rYB3GpJMjc2eLKfefSkNitymho0ar5Dm7CYn8RqOTsGJcc/Czpu6pyn
+f0Z8TiyF0c4F5LWvGjWzWBoS8+bRmY+V9BL56uK3x0gx0RvHGnlgro5UeVb02yzD
+lZ8tp5W6SBUCgYAnPJi6hiJjj+r9j8TnKm66MmZodiO94OJVhGTVVeR+JilJMJ2I
+b7yqFZ+ih5tROhTONo4Sf4aJh1crMI+/ZqetBZTU5yWJ+++ZX9UqhR+vIH7aRx8M
+n9FfmA8Z+v7ziAI7+jvIgAfwM97zLjZQgIaCLG2fezTrxtjdqNVSEaFd+QKBgEFP
+u9aH0tuA4u3a4utYc7BVmDVHA+JdjYQH7pj70ApKGULDOFvIzKXlapZz33Wy/V4V
+8Bbptp5fMiDtQUmuhnXwOj2fGuKyG9PnjTyPvqK19CV02GduG4rDiqQRom00jIBj
+WMyOjsvTx/qd5RizJvuYodsLRzEKElhsV3LMcv3hAoGAdOEUJYLM4HIb71elqZXl
+KI1BfMDgQZVWUm8Rto9UQXxDNvV0dVatCxIXEKsOnbJKlbLBq3vxRvI7OvnDs8+D
+ZDD/ebv5p4ThCk6Xq7wGdPRA9iKCzFUiXX2Zxx8orDj8th+h8aLrMFebOUdGKrbr
+L254LLY50nydp6ll0jMa/ck=
+-----END PRIVATE KEY-----
+"""
+_SERVER_CA_PEM = """-----BEGIN CERTIFICATE-----
+MIIEGTCCAwGgAwIBAgIJAMgC1Osv+BiBMA0GCSqGSIb3DQEBCwUAMIGiMQswCQYD
+VQQGEwJDTjESMBAGA1UECAwJR3VhbmdEb25nMREwDwYDVQQHDAhTaGVuWmhlbjEi
+MCAGA1UECgwZT1JWSUJPIFRlY2hub2xvZ3kgQ28uLEx0ZDELMAkGA1UECwwCSVQx
+FTATBgNVBAMMDCoub3J2aWJvLmNvbTEkMCIGCSqGSIb3DQEJARYVaGVoYWlsaWFu
+Z0BvcnZpYm8uY29tMB4XDTE4MDgyMjA2MjYzMFoXDTQ4MDgxNDA2MjYzMFowgaIx
+CzAJBgNVBAYTAkNOMRIwEAYDVQQIDAlHdWFuZ0RvbmcxETAPBgNVBAcMCFNoZW5a
+aGVuMSIwIAYDVQQKDBlPUlZJQk8gVGVjaG5vbG9neSBDby4sTHRkMQswCQYDVQQL
+DAJJVDEVMBMGA1UEAwwMKi5vcnZpYm8uY29tMSQwIgYJKoZIhvcNAQkBFhVoZWhh
+aWxpYW5nQG9ydmliby5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
+AQC27ZN/n9WSI7Qr3zg8XEx5tIbBU+S5kbEBKJpRPw99TN3ljiP3qgAEmnZK4FYa
+VSMdlIekyhUDXAQXRR0tN6STB2McIWbciZ/PnsyauVTB9vjcSXTRq2gsUcmfCM8q
+nHREaa4T9fbuCBBN4v9xmm7OuyKC6Q1BvCjzOqGAMCQRtyXMZwC1t+mVKhYa97b/
+T2yTjTwkrh72S7xkPv23OXnNAaVZUY6QyqFK62dE0eTIobrfDeRm51yRtr/SmMoW
+X8SwRG6JK1usOj4bSTAA4fftNz8yB+jopNN+Sg1ZRG9SJuk/dxRESNwNrMMOU0o6
+aoEJwWFB5jTxjBz7KhBG5vbjAgMBAAGjUDBOMB0GA1UdDgQWBBTS1g5JoJjqLP4B
+elFJY/He3L/7ojAfBgNVHSMEGDAWgBTS1g5JoJjqLP4BelFJY/He3L/7ojAMBgNV
+HRMEBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBf7oyDUparavLZhPdn7UwfmxnU
+gA+PK4nXKX7rqg8DRzeLkOOBGwxUzUJlxigtSI4+TIfqKVSt/4WKo0R7Ivpg4yKz
+lxDWPxVVncfMBxr/AZEVNFlVyVXWUekEoBckIyr5zRjPK3PfAtnd7jAQwYdsl2zG
+8zsJag4tbw7dyWFbQtezY7ZPx4c+mEPTwKbB5AAlidCOO+9axmhxliuoSy67CJER
+dZxEx2poqHRLDFbyir+C1OBPkXnTCHbP/eGiABhizmt7nkQMAyrdvc69PcgmhYhA
+YIowNqpmqRFbVwL7DHMzJ09vDCsZufD0TvR1DMDO3rGB/NlUQ6vktk4zg/UE
+-----END CERTIFICATE-----
+"""
+
+
+def _write_temp(text: str) -> str:
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".pem")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    return path
 
 
 def build_ssl_context(verify: bool = True) -> ssl.SSLContext:
-    """SSL context mirroring the app: client cert + pinned ORVIBO CA.
+    """SSL context mirroring the app: embedded client cert (+ optional CA pin).
 
     The 2018 ORVIBO cert has no SubjectAltName, so hostname verification is
-    disabled (Python requires a SAN and would reject it); the connection is
-    still authenticated by pinning ORVIBO's CA. Set ``verify=False`` to skip
-    server verification entirely if ORVIBO rotates to a cert this CA no
-    longer covers (the client cert is still sent, which is what the server
-    requires).
+    disabled; authentication is by the client cert and (optionally) pinning
+    ORVIBO's CA. Does blocking file I/O (temp files + load_cert_chain) -- build
+    it in an executor, not the event loop.
     """
+    cert = _write_temp(_CLIENT_CERT_PEM)
+    key = _write_temp(_CLIENT_KEY_PEM)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+    ctx.load_cert_chain(certfile=cert, keyfile=key)
     ctx.check_hostname = False
-    if verify and os.path.exists(SERVER_CA):
-        ctx.load_verify_locations(cafile=SERVER_CA)
+    if verify:
+        ca = _write_temp(_SERVER_CA_PEM)
+        ctx.load_verify_locations(cafile=ca)
         ctx.verify_mode = ssl.CERT_REQUIRED
     else:
         ctx.verify_mode = ssl.CERT_NONE
-    # ORVIBO's stack negotiates older TLS; allow down to TLS 1.0 for the
-    # legacy endpoint but let OpenSSL pick the best both support.
     try:
         ctx.minimum_version = ssl.TLSVersion.TLSv1
     except (ValueError, AttributeError):
