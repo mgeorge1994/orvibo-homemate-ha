@@ -15,12 +15,10 @@ handshake) and prints the server's decrypted reply. Paste the output back.
 Talks only to ORVIBO's own server.
 """
 import argparse
-import hashlib
 import json
 import os
 import socket
 import ssl
-import sys
 import zlib
 
 # --------------------------------------------------------------------------

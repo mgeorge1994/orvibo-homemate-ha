@@ -479,6 +479,7 @@ class HomeMateClient:
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
         )).payload
+        result = _as_int(resp.get("result"), default=0)
         if result not in (0, None):
             raise HomeMateAuthError(f"login failed, result={result}: {resp}")
         self.user_id = resp.get("userId") or resp.get("userid")
