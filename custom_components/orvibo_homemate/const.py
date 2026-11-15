@@ -1,4 +1,4 @@
-"""Constants for the ORVIBO HomeMate integration."""
+"""Constants for the ORVIBO HomeMate access-log integration."""
 from __future__ import annotations
 
 DOMAIN = "orvibo_homemate"
@@ -7,21 +7,22 @@ CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_HOST = "host"
 CONF_PORT = "port"
+CONF_SCAN_INTERVAL = "scan_interval"
 
 DEFAULT_HOST = "homemate.orvibo.com"
 DEFAULT_PORT = 10002
 
-# How often to poll device status (seconds). The lock also pushes status
-# asynchronously, which we handle live; this is the safety-net poll.
-UPDATE_INTERVAL = 60
+# How often to poll the cloud for new access records (seconds).
+DEFAULT_SCAN_INTERVAL = 60
+MIN_SCAN_INTERVAL = 20
 
-# ORVIBO deviceType values that represent a door lock.
-# 71 is the value seen for ORVIBO Wi-Fi locks in the app's product table;
-# adjust here if your lock reports a different deviceType (the config flow
-# logs every discovered device's type to help you confirm).
-LOCK_DEVICE_TYPES = {71}
+# Device type of the S2 lock in the cmd-147 device table.
+LOCK_DEVICE_TYPES = {107}
 
-# Keys that may appear in a lock status payload (deviceStatus.value1).
-# value1 == 0 -> unlocked, value1 == 1 -> locked (BaseLockFragment logic).
-LOCK_STATE_LOCKED = 1
-LOCK_STATE_UNLOCKED = 0
+# HA bus event fired for every new access/lock record (for automations/logbook).
+EVENT_ACCESS = f"{DOMAIN}_access"
+
+# StatusRecord.type -> coarse event category. type 0 is a normal unlock; other
+# values are door/alarm events. Unknown types pass through as "event" and the
+# server-provided text still describes them.
+RECORD_TYPE_UNLOCK = 0

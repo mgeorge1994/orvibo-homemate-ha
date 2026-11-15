@@ -1,153 +1,135 @@
-# ORVIBO HomeMate — Home Assistant integration (S2 smart lock)
+# ORVIBO HomeMate — Home Assistant access-log integration (S2 smart lock)
 
-Control your **ORVIBO S2 Wi-Fi smart lock** from Home Assistant by logging in
-with your own ORVIBO account and talking to ORVIBO's server **the same way the
-ORVIBO Home app does** — no phone app in the loop, no third-party cloud, no
-IFTTT/Google/Alexa relay.
+Bring your **ORVIBO S2 smart lock's access log into Home Assistant** — who unlocked
+the door, when, and with what method (fingerprint / password / card / key), plus
+door and alarm events — by logging in with your own ORVIBO account and reading the
+records ORVIBO stores on its server, exactly the way the ORVIBO Home app does.
 
-It is built from a clean-room reverse-engineering of the ORVIBO Home Android
-app (`com.orvibo.homemate` 5.2.6.308) and its native crypto library. The full
-protocol is documented in [`PROTOCOL.md`](PROTOCOL.md).
+Built from a clean-room reverse-engineering of the ORVIBO Home Android app
+(`com.orvibo.homemate` 5.2.6.308). Full protocol notes in [`PROTOCOL.md`](PROTOCOL.md).
 
-> **Honest scope note.** A *fully offline, LAN-only* integration is not
-> achievable for the S2: it's a battery lock (10×AA, ~800-day life) whose
-> Wi-Fi sleeps, so it has no always-on local endpoint. This integration is
-> **"cloud-local"** — Home Assistant holds a direct session to ORVIBO's
-> server and controls the lock over it. That's the practical way to get the
-> lock into HA without the phone app or a third-party cloud. See the end of
-> `PROTOCOL.md` for why.
+> **Why logs, not lock/unlock?** The S2 is a battery lock (10×AA); its Wi‑Fi
+> radio sleeps, so it holds no live cloud connection and can't be commanded
+> on demand (confirmed against a live account — the server reports it offline
+> even while the app shows a Bluetooth link). But every access event **is**
+> stored server-side, so reading the log works reliably regardless of whether
+> the lock is awake. That's what this integration does.
 
----
+## What you get
 
-## What works
+For each lock:
 
-- **Lock / unlock** the S2 (`lock` entity).
-- **Lock state** (locked / unlocked), updated both on poll and from the
-  lock's own asynchronous status pushes.
-- **Battery** sensor (best-effort; key auto-detected — see notes).
-- Config flow (UI setup) with your ORVIBO email/phone + password.
+- **`sensor.<lock>_last_access`** — state like `George (fingerprint)`; attributes
+  include the person, method, timestamp, the server's message text, and a
+  `recent` list of the last 50 events.
+- **`event.<lock>_access`** — fires an HA event per new record (types: `unlock`,
+  `alarm`, `event`) with person/method/text — great for the Logbook and
+  automations ("notify me when the door is unlocked", "alert on an alarm").
+- **`sensor.<lock>_battery_voltage`** — battery voltage reported with records
+  (e.g. 7.34 V).
+- An HA bus event **`orvibo_homemate_access`** fired for every new record, if you
+  prefer to trigger automations off the bus directly.
 
-## Status / confidence
-
-The wire protocol — framing, AES-128-ECB/PKCS7 crypto, CRC32, command codes
-(0/2/4/15), and JSON envelope — is taken directly from the app and the native
-`.so`, and the crypto is unit-tested against the FIPS-197 AES vector
-(`tests/`, 11/11 passing). What could **not** be pinned by static analysis
-alone are a few live server response details (exact key names, the lock's
-`deviceType`, the battery field, and whether the server redirects after the
-handshake). These are listed in `PROTOCOL.md §7`.
-
-**Before trusting it, calibrate once** with the standalone tool:
-
-```bash
-pip install cryptography
-python tools/sniff.py --user you@example.com --password 'yourpass' --list
-```
-
-That logs in, prints every decrypted server frame, and lists your devices
-(with their `deviceType`, `deviceId`, `uid`). Use the output to:
-
-1. Confirm login succeeds and note your lock's `deviceType` → put it in
-   `custom_components/orvibo_homemate/const.py` → `LOCK_DEVICE_TYPES`.
-2. Confirm unlock works: `python tools/sniff.py ... --unlock <deviceId> <uid>`
-   (enable **remote unlock** on the lock in the ORVIBO app first — ORVIBO
-   gates remote unlock per-lock).
-3. Note the battery key in `--status` output if the sensor shows `unknown`.
-
-If `sniff.py` works end-to-end, the HA integration will too.
-
----
+Polls ORVIBO's cloud on an interval (default 60 s), so new entries show up within
+about a minute.
 
 ## Install
 
-1. Copy `custom_components/orvibo_homemate/` into your Home Assistant
-   `config/custom_components/` directory:
-
-   ```
-   config/custom_components/orvibo_homemate/
-   ```
-
+1. **HACS → Integrations → ⋮ → Custom repositories**, add
+   `https://github.com/mgeorge1994/orvibo-homemate-ha` (category: Integration),
+   then install **"ORVIBO HomeMate (S2 Lock Access Log)"**.
+   (Or copy `custom_components/orvibo_homemate/` into `config/custom_components/`.)
 2. Restart Home Assistant.
-3. **Settings → Devices & Services → Add Integration → "ORVIBO HomeMate"**.
-4. Enter the ORVIBO account email/phone and password you use in the app.
-   (Host/port default to `homemate.orvibo.com:10002`.)
+3. **Settings → Devices & Services → Add Integration → "ORVIBO HomeMate"**, and
+   sign in with the email/phone + password you use in the ORVIBO app.
 
-Your lock appears as a `lock.` entity plus a battery sensor.
+Your lock appears as a device with the sensors and event entity above.
 
-### HACS (optional)
-Add this repo as a custom repository (category: Integration), then install
-as usual.
+## Example automation
 
----
+```yaml
+automation:
+  - alias: Notify on door unlock
+    trigger:
+      - platform: event
+        event_type: orvibo_homemate_access
+    action:
+      - service: notify.mobile_app_your_phone
+        data:
+          message: >
+            {{ trigger.event.data.person }} unlocked the door
+            with {{ trigger.event.data.method }}.
+```
+
+Or trigger off the event entity:
+
+```yaml
+    trigger:
+      - platform: state
+        entity_id: event.smart_lock_s2_access
+```
 
 ## How it works (short version)
 
 ```
-Home Assistant ──TCP:10002──> homemate.orvibo.com
-   cmd 0  requestServerKey  (AES key "khggd54865SNJHGF")  -> session key
-   cmd 2  login  (user + MD5 password, session-key AES)
-   cmd 4  loadTable "device"            -> finds the S2
-   cmd 15 control order="unlock"/"lock" -> operates the lock
+Home Assistant ──TLS:10002──> homemate.orvibo.com   (mutual TLS, client cert)
+   cmd 0   requestServerKey          -> session key   (header carries sessionId)
+   cmd 2   login (user + MD5 pw)     -> userId, familyList
+   cmd 147 queryWifiDeviceData       -> finds the S2  (deviceId, type 107)
+   cmd 130 status records (paged)    -> access log: who / when / method
 ```
 
 Frames are `"hd"` + length + protocol-type + CRC32 + 32-byte sessionId +
-AES-128-ECB(PKCS7) JSON. Full details in [`PROTOCOL.md`](PROTOCOL.md).
+AES-128-ECB(PKCS7) JSON. Records arrive in `statusRecordList`, each with `time`,
+`type`, `value4` (method), the door-user, and a ready-made `text`. Full details
+and the reverse-engineering story are in [`PROTOCOL.md`](PROTOCOL.md).
 
----
+## Status / confidence
+
+The protocol — mutual-TLS transport, AES-128-ECB/PKCS7 crypto (unit-tested vs
+FIPS-197), framing, the login → device → records flow, and pagination — was
+verified end-to-end against a live account: real access records come back
+correctly. The `tools/` scripts (`orvibo_logs.py`, `diagnose*.py`) let you
+reproduce that from any machine with just Python 3 (no pip).
 
 ## Troubleshooting
 
-Enable debug logging to see decrypted frames:
+Enable debug logging:
 
 ```yaml
-# configuration.yaml
 logger:
-  default: warning
   logs:
     custom_components.orvibo_homemate: debug
 ```
 
-- **"cannot_connect" / "could not connect to ORVIBO server"** — the server
-  speaks **mutual TLS** on port 10002 and requires ORVIBO's client
-  certificate. This integration ships that cert (extracted from the app) in
-  `certs/` and uses it automatically. If you still can't connect: make sure
-  your HA host has outbound access to `homemate.orvibo.com:10002`, and that
-  the `certs/` folder was copied in. The client presents the cert but does
-  **not** verify the server by default; that's intentional so ORVIBO cert
-  rotation can't block you.
-- **"invalid_auth"** — wrong ORVIBO email/phone or password. The password is
-  hashed (MD5, uppercase) before sending, same as the app.
-- **Lock not created** — your lock's `deviceType` isn't in
-  `LOCK_DEVICE_TYPES`. Check the log line listing discovered device types and
-  add yours.
-- **Unlock rejected (non-zero result), lock works** — enable *remote unlock*
-  on the lock in the ORVIBO app.
-- **Battery shows unknown** — add the right key to `_BATTERY_KEYS` in
-  `sensor.py` (see `--status` output from `sniff.py`).
-
----
+- **"invalid_auth"** — wrong ORVIBO email/phone or password.
+- **No lock / no records** — the integration logs every discovered device and its
+  `deviceType` on setup; the S2 is type **107**. If yours differs, add it to
+  `LOCK_DEVICE_TYPES` in `const.py`.
+- **Records stop updating** — the lock only reports to the cloud when it briefly
+  connects (after use); history is retained server-side, so entries appear on the
+  next sync.
 
 ## Legal / ethics
 
-This is an interoperability project for a device **you own**, using **your
-own** ORVIBO credentials against ORVIBO's own service — comparable to the
-official app. It ships no ORVIBO code or binaries; the native crypto is
-re-implemented from documented standard algorithms (AES-128-ECB). Respect
-ORVIBO's terms of service and don't hammer their servers. No warranty.
+Interoperability project for a device **you own**, using **your own** ORVIBO
+credentials against ORVIBO's own service — comparable to the official app. Ships
+no ORVIBO code or binaries; the native crypto is re-implemented from the standard
+AES algorithm. Respect ORVIBO's terms and don't hammer the servers. No warranty.
 
 ## Project layout
 
 ```
 custom_components/orvibo_homemate/
-  homemate.py      # the protocol client (crypto, framing, async session)
-  __init__.py      # integration setup
-  config_flow.py   # UI setup
-  coordinator.py   # persistent session + status cache
-  lock.py          # lock entity
-  sensor.py        # battery sensor
-  const.py         # tunables (LOCK_DEVICE_TYPES, host/port, intervals)
-  translations/
-tools/sniff.py     # standalone login/control/calibration tool
-tests/             # offline crypto + framing tests (run: python tests/test_protocol.py)
+  homemate.py      # protocol client (crypto, framing, session, cmd 147/130)
+  __init__.py      # setup
+  config_flow.py   # UI login
+  coordinator.py   # session + polling + new-record detection
+  sensor.py        # last-access + battery sensors
+  event.py         # access event entity
+  const.py         # tunables (LOCK_DEVICE_TYPES, scan interval, host/port)
+  certs/           # ORVIBO client cert for mutual TLS (extracted from the app)
+tools/             # standalone diagnostics (no pip): orvibo_logs.py, diagnose*.py
+tests/             # offline crypto/record tests (python tests/test_protocol.py)
 PROTOCOL.md        # full reverse-engineering writeup
 ```

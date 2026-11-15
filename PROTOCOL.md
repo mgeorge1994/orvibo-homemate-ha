@@ -187,6 +187,44 @@ first. Locking and status reads are not gated this way.
 
 ---
 
+## 6b. Access log (what this integration actually uses)
+
+Two things diverge from a naive device/control model, both confirmed against a
+live account:
+
+1. **Listing a Wi-Fi lock is cmd 147, not cmd 4.** The S2 connects directly to
+   Wi-Fi (no hub), so it is listed by `queryWifiDeviceData` (**cmd 147**,
+   builder `core/c.java#e3`), a paginated bulk sync. Its `device` row has
+   `deviceType: 107`, the `deviceId`, the `uid`, and `deviceName "Smart Lock S2"`.
+   The reply spans several frames sharing one serial (`tPage`/`pageIndex`); a
+   client must read **all** pages before the next request or the leftover pages
+   desync the stream.
+
+2. **Access records are cmd 130** (`core/c.java#D3`, remote-only), returning
+   `statusRecordList`:
+   ```json
+   {
+     "messageId": "...", "deviceId": "...", "time": 1794725657,
+     "type": 0, "value1": 1, "value2": 1, "value3": 734, "value4": 1,
+     "text": "George   unlocked with fingerprint.",
+     "sequence": 1792468982, "userId": "...", "picUrl": null, "videoUrl": null
+   }
+   ```
+   - `time` — epoch seconds of the event.
+   - `type` — 0 = unlock; other values = door/alarm events.
+   - `value4` — unlock method: 1=fingerprint, 2=password, 3=card, 4=key,
+     5=remote, 6=face, 7/8=temporary/dynamic password.
+   - `value2` — credential slot / authorizedId (maps to a person via the
+     `doorUserBind` table).
+   - `value3` — battery centivolts (`734` → 7.34 V).
+   - `text` — a ready-made human message (localized by the server).
+   - `sequence` — monotonic; use for dedup/pagination. First page:
+     `maxSequence=-1, minSequence=-1, readCount=20, type=0`; older pages:
+     `maxSequence = (oldest sequence - 1)`.
+
+   Records are stored server-side, so cmd 130 works even while the lock's Wi-Fi
+   is asleep — which is the whole point.
+
 ## 7. What still needs live confirmation
 
 Everything structural (framing, crypto, cmd codes, JSON keys) is taken

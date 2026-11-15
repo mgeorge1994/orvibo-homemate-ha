@@ -124,9 +124,11 @@ _SESSION_FIELD_LEN = 32
 # Command codes (core/c.java + dispatch in core/g.java)
 CMD_REQUEST_KEY = 0      # requestServerKey  (pt="pk")
 CMD_LOGIN = 2           # login             (userName + MD5(password))
-CMD_LOAD_TABLE = 4      # table sync (devices, status, rooms, ...)
+CMD_LOAD_TABLE = 4      # hub/family table sync (per-gateway)
 CMD_CONTROL = 15        # control device    (order + value1..4)
 CMD_DISCOVER = 86       # LAN UDP discovery (pt="pk")
+CMD_QUERY_WIFI_DEVICE = 147  # bulk sync for Wi-Fi devices (lists the lock)
+CMD_STATUS_RECORD = 130      # access/event records (who/when/method)
 
 # Lock "order" values (data/k0.java)
 ORDER_UNLOCK = "unlock"
@@ -290,6 +292,51 @@ class Device:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+# Unlock-method code (StatusRecord.value4). Derived from observed records and
+# the app's lock constants; the server also sends a ready-made ``text``.
+UNLOCK_METHODS = {
+    1: "fingerprint",
+    2: "password",
+    3: "card",
+    4: "mechanical_key",
+    5: "remote",
+    6: "face",
+    7: "temporary_password",
+    8: "dynamic_password",
+}
+
+# Lock device type seen in the account (cmd 147 device record).
+DEVICE_TYPE_LOCK = 107
+
+
+@dataclass
+class AccessRecord:
+    """One lock event: who, when, by what method (plus the raw row)."""
+    message_id: str
+    device_id: str
+    time: int              # epoch seconds of the event
+    type: int              # 0 = unlock; other values = door-ajar/alarms
+    method_code: int       # value4
+    user_slot: int         # value2 (authorizedId / credential slot)
+    text: str              # server-provided human message, e.g. "George unlocked with fingerprint."
+    sequence: int
+    battery_volts: float | None = None   # value3/100 (e.g. 734 -> 7.34 V)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def method(self) -> str:
+        return UNLOCK_METHODS.get(self.method_code, f"method_{self.method_code}")
+
+    @property
+    def person(self) -> str:
+        """Best-effort person name parsed from the server text."""
+        t = (self.text or "").strip()
+        for sep in (" unlocked", " locked", " opened", " "):
+            if sep in t:
+                return t.split(sep)[0].strip()
+        return t
+
+
 # --------------------------------------------------------------------------
 # Async client
 # --------------------------------------------------------------------------
@@ -319,9 +366,13 @@ class HomeMateClient:
         self._session_key: bytes | None = None
         self.user_id: str | None = None
         self.family_id: str | None = None
+        # [(familyId, gatewayUid), ...] discovered from the login reply
+        self.gateways: list[tuple[str, str]] = []
 
         self._serial = int(time.time()) & 0x7FFFFFFF
         self._pending: dict[int, asyncio.Future] = {}
+        # per-serial page accumulator: serial -> {"session_id": str, "scalars": dict, "lists": dict}
+        self._accum: dict[int, dict] = {}
         self._lock = asyncio.Lock()
         self._listeners: list = []  # callbacks for unsolicited status frames
 
@@ -375,6 +426,7 @@ class HomeMateClient:
                 if not fut.done():
                     fut.set_exception(HomeMateError("connection closed"))
             self._pending.clear()
+            self._accum.clear()
 
     def _handle_raw(self, raw: bytes) -> None:
         try:
@@ -383,9 +435,8 @@ class HomeMateClient:
             _LOGGER.debug("drop unparseable frame: %s", err)
             return
         serial = _as_int(frame.payload.get("serial"))
-        fut = self._pending.pop(serial, None) if serial is not None else None
-        if fut and not fut.done():
-            fut.set_result(frame)
+        if serial is not None and serial in self._pending:
+            self._accumulate_page(serial, frame)
             return
         # Unsolicited (status report / push) -> notify listeners
         for cb in list(self._listeners):
@@ -393,6 +444,37 @@ class HomeMateClient:
                 cb(frame.payload)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("status listener error")
+
+    def _accumulate_page(self, serial: int, frame: Frame) -> None:
+        """Merge a (possibly paginated) response; resolve the future on the last page.
+
+        Multi-table/paginated replies (e.g. cmd 147) arrive as several frames
+        sharing one serial, with ``tPage``/``pageIndex``. Scalars are taken
+        from the first page; list fields are concatenated across pages.
+        """
+        payload = frame.payload
+        acc = self._accum.setdefault(
+            serial, {"session_id": frame.session_id, "scalars": {}, "lists": {}}
+        )
+        for k, v in payload.items():
+            if isinstance(v, list):
+                acc["lists"].setdefault(k, []).extend(v)
+            else:
+                acc["scalars"].setdefault(k, v)
+
+        tpage = _as_int(payload.get("tPage"), default=0) or 0
+        pindex = _as_int(payload.get("pageIndex"), default=0) or 0
+        last_page = tpage <= 1 or (pindex + 1) >= tpage
+        if not last_page:
+            return
+
+        merged = dict(acc["scalars"])
+        merged.update(acc["lists"])
+        self._accum.pop(serial, None)
+        fut = self._pending.pop(serial, None)
+        if fut and not fut.done():
+            fut.set_result(Frame(protocol_type=frame.protocol_type,
+                                 session_id=acc["session_id"], payload=merged))
 
     # -- request/response ----------------------------------------------
     def _next_serial(self) -> int:
@@ -479,90 +561,105 @@ class HomeMateClient:
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
         )).payload
-        result = _as_int(resp.get("result"), default=0)
-        if result not in (0, None):
-            raise HomeMateAuthError(f"login failed, result={result}: {resp}")
-        self.user_id = resp.get("userId") or resp.get("userid")
-        self.family_id = resp.get("familyId") or resp.get("familyid")
-        _LOGGER.debug("login ok: userId=%s familyId=%s", self.user_id, self.family_id)
+        # The result code is in "status" (0 = OK); "result" kept as a fallback.
+        status = _as_int(resp.get("status"), default=None)
+        if status is None:
+            status = _as_int(resp.get("result"), default=0)
+        if status not in (0, None):
+            raise HomeMateAuthError(f"login failed, status={status} "
+                                    f"(12 = bad account/password): {resp}")
+        self.user_id = (resp.get("userId") or resp.get("userid") or "")
+        # The login reply carries the family list (each with its gateways).
+        families = resp.get("familyList") or []
+        self.gateways = []
+        for fam in families:
+            fid = fam.get("familyId") or fam.get("familyid") or ""
+            if fid and not self.family_id:
+                self.family_id = fid
+            for gw in (fam.get("gatewayList") or []):
+                guid = gw.get("uid")
+                if guid:
+                    self.gateways.append((fid, guid))
+        self.family_id = self.family_id or resp.get("familyId") or ""
+        _LOGGER.debug("login ok: userId=%s familyId=%s gateways=%s",
+                      self.user_id, self.family_id, self.gateways)
 
     # -- public API ----------------------------------------------------
     async def get_devices(self) -> list[Device]:
-        """Enumerate devices via the ``device`` table (cmd 4)."""
+        """List Wi-Fi devices (cmd 147). The S2 lock appears in the ``device`` table."""
         resp = (await self._send(
-            CMD_LOAD_TABLE,
+            CMD_QUERY_WIFI_DEVICE,
             {
-                "uid": "",
                 "userName": self._username,
-                "lastUpdateTime": 0,
+                "userId": self.user_id or "",
                 "familyId": self.family_id or "",
-                "tableName": TABLE_DEVICE,
                 "pageIndex": 0,
                 "dataType": "",
+                "lastUpdateTime": 0,
+                "deviceFlag": 0,
             },
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
         )).payload
-        records = resp.get("data") or resp.get("dataList") or []
         devices: list[Device] = []
-        for rec in records:
-            devices.append(
-                Device(
-                    device_id=rec.get("deviceId", ""),
-                    uid=rec.get("uid", ""),
-                    name=rec.get("deviceName") or rec.get("name") or "",
-                    device_type=_as_int(rec.get("deviceType"), default=-1),
-                    model=rec.get("model", ""),
-                    raw=rec,
-                )
-            )
+        for rec in (resp.get("device") or []):
+            if not isinstance(rec, dict):
+                continue
+            did = rec.get("deviceId", "")
+            if not did:
+                continue
+            devices.append(Device(
+                device_id=did,
+                uid=rec.get("uid", ""),
+                name=rec.get("deviceName") or rec.get("name") or "",
+                device_type=_as_int(rec.get("deviceType"), default=-1),
+                model=rec.get("model", ""),
+                raw=rec,
+            ))
         return devices
 
-    async def get_device_status(self, device_id: str = "") -> list[dict[str, Any]]:
-        """Load the ``deviceStatus`` table (value1 holds lock state)."""
-        resp = (await self._send(
-            CMD_LOAD_TABLE,
-            {
-                "uid": "",
-                "userName": self._username,
-                "lastUpdateTime": 0,
-                "familyId": self.family_id or "",
-                "tableName": TABLE_DEVICE_STATUS,
-                "pageIndex": 0,
-                "dataType": "",
-            },
-            protocol_type="dk",
-            key=self._session_key,  # type: ignore[arg-type]
-        )).payload
-        return resp.get("data") or resp.get("dataList") or []
+    async def get_records(self, uid: str, device_id: str, *,
+                          max_sequence: int = -1, min_sequence: int = -1,
+                          count: int = 20, type_filter: int = 0) -> list[AccessRecord]:
+        """Fetch access/event records for a lock (cmd 130).
 
-    async def control(self, uid: str, device_id: str, order: str, *,
-                      value1: int = 0, value2: int = 0, value3: int = 0,
-                      value4: int = 0) -> dict[str, Any]:
-        """Send a control command (cmd 15)."""
-        return (await self._send(
-            CMD_CONTROL,
+        These are stored on ORVIBO's server, so they are retrievable even while
+        the lock's Wi-Fi is asleep. Defaults return the newest ``count`` events.
+        For older pages, pass ``max_sequence`` = (oldest sequence seen - 1).
+        """
+        resp = (await self._send(
+            CMD_STATUS_RECORD,
             {
                 "uid": uid,
                 "userName": self._username,
+                "familyId": self.family_id or "",
                 "deviceId": device_id,
-                "order": order,
-                "value1": value1,
-                "value2": value2,
-                "value3": value3,
-                "value4": value4,
-                "delayTime": 0,
-                "qualityOfService": 1,
+                "maxSequence": max_sequence,
+                "minSequence": min_sequence,
+                "readCount": count,
+                "type": type_filter,
             },
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
         )).payload
-
-    async def unlock(self, uid: str, device_id: str) -> dict[str, Any]:
-        return await self.control(uid, device_id, ORDER_UNLOCK)
-
-    async def lock(self, uid: str, device_id: str) -> dict[str, Any]:
-        return await self.control(uid, device_id, ORDER_LOCK)
+        out: list[AccessRecord] = []
+        for r in (resp.get("statusRecordList") or []):
+            if not isinstance(r, dict):
+                continue
+            v3 = _as_int(r.get("value3"))
+            out.append(AccessRecord(
+                message_id=r.get("messageId", ""),
+                device_id=r.get("deviceId", ""),
+                time=_as_int(r.get("time"), default=0) or 0,
+                type=_as_int(r.get("type"), default=0) or 0,
+                method_code=_as_int(r.get("value4"), default=0) or 0,
+                user_slot=_as_int(r.get("value2"), default=0) or 0,
+                text=(r.get("text") or "").strip(),
+                sequence=_as_int(r.get("sequence"), default=0) or 0,
+                battery_volts=(v3 / 100.0) if v3 and 300 <= v3 <= 900 else None,
+                raw=r,
+            ))
+        return out
 
 
 # --------------------------------------------------------------------------
@@ -577,6 +674,30 @@ def _as_int(val: Any, default: int | None = None) -> int | None:
         return int(val)
     except (TypeError, ValueError):
         return default
+
+
+def _extract_records(resp: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pull table rows out of a cmd-4 reply.
+
+    Single-table loads return rows in ``playLoad`` (a list, or a JSON string
+    of a list). ``data``/``dataList`` are accepted as fallbacks.
+    """
+    pl = resp.get("playLoad")
+    if isinstance(pl, str):
+        try:
+            pl = json.loads(pl)
+        except (ValueError, TypeError):
+            pl = None
+    if isinstance(pl, list):
+        return [r for r in pl if isinstance(r, dict)]
+    if isinstance(pl, dict):
+        for v in pl.values():
+            if isinstance(v, list):
+                return [r for r in v if isinstance(r, dict)]
+    data = resp.get("data") or resp.get("dataList")
+    if isinstance(data, list):
+        return [r for r in data if isinstance(r, dict)]
+    return []
 
 
 def _as_key(key: Any) -> bytes:

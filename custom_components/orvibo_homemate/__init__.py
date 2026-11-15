@@ -12,7 +12,7 @@ from .coordinator import HomeMateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.LOCK, Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.EVENT]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

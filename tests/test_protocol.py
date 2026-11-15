@@ -126,6 +126,28 @@ def test_frames_from_buffer_handles_coalescing():
     assert bytes(buf) == f2[:10]
 
 
+def test_access_record_person_and_method():
+    r = hm.AccessRecord(
+        message_id="m", device_id="d", time=1794725657, type=0,
+        method_code=1, user_slot=1,
+        text="George   unlocked with fingerprint.", sequence=10,
+        battery_volts=7.34,
+    )
+    assert r.method == "fingerprint"
+    assert r.person == "George"
+    r2 = hm.AccessRecord(message_id="m", device_id="d", time=1, type=0,
+                         method_code=2, user_slot=2,
+                         text="Tatisor   unlocked with password.", sequence=11)
+    assert r2.method == "password"
+    assert r2.person == "Tatisor"
+
+
+def test_unlock_method_map():
+    assert hm.UNLOCK_METHODS[1] == "fingerprint"
+    assert hm.UNLOCK_METHODS[2] == "password"
+    assert hm.UNLOCK_METHODS[3] == "card"
+
+
 if __name__ == "__main__":
     funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

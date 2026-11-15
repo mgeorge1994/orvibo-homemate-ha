@@ -1,5 +1,7 @@
-"""Battery sensor for ORVIBO HomeMate locks."""
+"""Sensors for ORVIBO HomeMate locks: last access event + battery."""
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -7,7 +9,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import UnitOfElectricPotential
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -16,51 +18,101 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import HomeMateCoordinator
 from .homemate import Device
-from .lock import _is_lock
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: HomeMateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        OrviboBatterySensor(coordinator, dev)
-        for dev in coordinator.devices.values()
-        if _is_lock(dev)
+    entities: list[SensorEntity] = []
+    for device_id, lock in coordinator.locks.items():
+        entities.append(LastAccessSensor(coordinator, lock))
+        entities.append(LockBatterySensor(coordinator, lock))
+    async_add_entities(entities)
+
+
+def _device_info(lock: Device) -> DeviceInfo:
+    return DeviceInfo(
+        identifiers={(DOMAIN, lock.device_id)},
+        name=lock.name or "ORVIBO Lock",
+        manufacturer="ORVIBO",
+        model=lock.model or "S2",
     )
 
 
-class OrviboBatterySensor(CoordinatorEntity[HomeMateCoordinator], SensorEntity):
-    """Battery level reported by the lock.
-
-    ORVIBO locks report battery in the deviceStatus payload. The exact key
-    varies by firmware; we try the common ones. If your lock exposes it
-    under a different key, add it to ``_BATTERY_KEYS``.
-    """
-
-    _BATTERY_KEYS = ("battery", "electricity", "power", "value4", "batteryLevel")
-
+class _Base(CoordinatorEntity[HomeMateCoordinator], SensorEntity):
     _attr_has_entity_name = True
-    _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator: HomeMateCoordinator, device: Device) -> None:
+    def __init__(self, coordinator: HomeMateCoordinator, lock: Device) -> None:
         super().__init__(coordinator)
-        self._device = device
-        self._attr_unique_id = f"{device.device_id}_battery"
-        self._attr_name = "Battery"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-        )
+        self._lock = lock
+        self._attr_device_info = _device_info(lock)
 
     @property
-    def native_value(self) -> int | None:
-        status = (self.coordinator.data or {}).get(self._device.device_id, {})
-        for key in self._BATTERY_KEYS:
-            if key in status and status[key] is not None:
-                try:
-                    return int(status[key])
-                except (TypeError, ValueError):
-                    continue
-        return None
+    def _entry(self) -> dict:
+        return (self.coordinator.data or {}).get(self._lock.device_id, {})
+
+
+class LastAccessSensor(_Base):
+    """State = who last unlocked; attributes carry method, time and recent log."""
+
+    _attr_icon = "mdi:door-open"
+
+    def __init__(self, coordinator: HomeMateCoordinator, lock: Device) -> None:
+        super().__init__(coordinator, lock)
+        self._attr_unique_id = f"{lock.device_id}_last_access"
+        self._attr_name = "Last access"
+
+    @property
+    def native_value(self) -> str | None:
+        latest = self._entry.get("latest")
+        if not latest:
+            return None
+        # e.g. "George (fingerprint)"
+        person = latest.person or "unknown"
+        return f"{person} ({latest.method})"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        latest = self._entry.get("latest")
+        recent = self._entry.get("recent") or []
+        attrs: dict = {
+            "recent": [
+                {
+                    "time": datetime.fromtimestamp(r.time, timezone.utc).isoformat(),
+                    "person": r.person,
+                    "method": r.method,
+                    "type": r.type,
+                    "text": r.text,
+                }
+                for r in recent
+            ],
+        }
+        if latest:
+            attrs.update({
+                "person": latest.person,
+                "method": latest.method,
+                "method_code": latest.method_code,
+                "message": latest.text,
+                "event_time": datetime.fromtimestamp(latest.time, timezone.utc).isoformat(),
+                "event_type": latest.type,
+            })
+        return attrs
+
+
+class LockBatterySensor(_Base):
+    """Battery voltage reported alongside access records (value3 / 100)."""
+
+    _attr_device_class = SensorDeviceClass.VOLTAGE
+    _attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, coordinator: HomeMateCoordinator, lock: Device) -> None:
+        super().__init__(coordinator, lock)
+        self._attr_unique_id = f"{lock.device_id}_battery_voltage"
+        self._attr_name = "Battery voltage"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._entry.get("battery_volts")
