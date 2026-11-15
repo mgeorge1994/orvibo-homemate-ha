@@ -1,7 +1,7 @@
 {
   "domain": "orvibo_homemate",
   "name": "ORVIBO HomeMate (S2 Lock)",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "documentation": "https://github.com/your/orvibo-homemate-ha",
   "issue_tracker": "https://github.com/your/orvibo-homemate-ha/issues",
   "codeowners": [],

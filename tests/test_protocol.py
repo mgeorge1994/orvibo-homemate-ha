@@ -98,6 +98,19 @@ def test_parse_frame_roundtrip_session():
     assert parsed.payload["deviceId"] == "dev123"
 
 
+def test_session_id_comes_from_header_not_body():
+    """Regression: the server returns sessionId in the frame HEADER, and the
+    session key in the body. The client must read the id from the header."""
+    reply = hm.build_frame(
+        {"serial": 1, "cmd": 0, "key": "6wW6BoJQ097NKMD3", "status": 0},
+        protocol_type="pk", key=hm.PK_KEY, session_id="SESS_ABC123",
+    )
+    fr = hm.parse_frame(reply, session_key=None)
+    assert fr.session_id == "SESS_ABC123"          # from header
+    assert "SessionId" not in fr.payload           # not in body
+    assert fr.payload["key"] == "6wW6BoJQ097NKMD3"  # key is in body
+
+
 def test_frames_from_buffer_handles_coalescing():
     key = b"0123456789abcdef"
     f1 = hm.build_frame({"cmd": 1, "serial": 1}, protocol_type="dk", key=key, session_id="S")

@@ -401,7 +401,7 @@ class HomeMateClient:
 
     async def _send(self, cmd: int, fields: dict[str, Any], *,
                     protocol_type: str, key: bytes,
-                    expect_response: bool = True) -> dict[str, Any]:
+                    expect_response: bool = True) -> Frame:
         if self._writer is None:
             raise HomeMateError("not connected")
 
@@ -429,17 +429,18 @@ class HomeMateClient:
             await self._writer.drain()
 
         if not expect_response:
-            return {}
+            return Frame(protocol_type=protocol_type, session_id=self._session_id or "",
+                         payload={})
         try:
             result: Frame = await asyncio.wait_for(fut, REQUEST_TIMEOUT)
         except asyncio.TimeoutError as err:
             self._pending.pop(serial, None)
             raise HomeMateTimeout(f"no response for cmd {cmd}") from err
-        return result.payload
+        return result
 
     # -- protocol steps ------------------------------------------------
     async def _request_server_key(self) -> None:
-        resp = await self._send(
+        frame = await self._send(
             CMD_REQUEST_KEY,
             {
                 "source": 1,
@@ -453,16 +454,21 @@ class HomeMateClient:
             protocol_type="pk",
             key=PK_KEY,
         )
-        # The cmd-0 response carries the session id (header) + key (body).
-        self._session_id = resp.get("SessionId") or resp.get("sessionId") or self._session_id
-        key = resp.get("key")
+        # The session id lives in the response FRAME HEADER (not the body);
+        # the body carries the session key. Both are needed for every
+        # subsequent frame (sessionId -> header, key -> AES).
+        if frame.session_id:
+            self._session_id = frame.session_id
+        elif frame.payload.get("SessionId"):
+            self._session_id = frame.payload["SessionId"]
+        key = frame.payload.get("key")
         if not key:
-            raise HomeMateError(f"no session key in handshake response: {resp}")
+            raise HomeMateError(f"no session key in handshake response: {frame.payload}")
         self._session_key = _as_key(key)
-        _LOGGER.debug("handshake ok: sessionId=%s", self._session_id)
+        _LOGGER.debug("handshake ok: sessionId=%r", self._session_id)
 
     async def _login(self) -> None:
-        resp = await self._send(
+        resp = (await self._send(
             CMD_LOGIN,
             {
                 "userName": self._username,
@@ -472,8 +478,7 @@ class HomeMateClient:
             },
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
-        )
-        result = _as_int(resp.get("result"), default=0)
+        )).payload
         if result not in (0, None):
             raise HomeMateAuthError(f"login failed, result={result}: {resp}")
         self.user_id = resp.get("userId") or resp.get("userid")
@@ -483,7 +488,7 @@ class HomeMateClient:
     # -- public API ----------------------------------------------------
     async def get_devices(self) -> list[Device]:
         """Enumerate devices via the ``device`` table (cmd 4)."""
-        resp = await self._send(
+        resp = (await self._send(
             CMD_LOAD_TABLE,
             {
                 "uid": "",
@@ -496,7 +501,7 @@ class HomeMateClient:
             },
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
-        )
+        )).payload
         records = resp.get("data") or resp.get("dataList") or []
         devices: list[Device] = []
         for rec in records:
@@ -514,7 +519,7 @@ class HomeMateClient:
 
     async def get_device_status(self, device_id: str = "") -> list[dict[str, Any]]:
         """Load the ``deviceStatus`` table (value1 holds lock state)."""
-        resp = await self._send(
+        resp = (await self._send(
             CMD_LOAD_TABLE,
             {
                 "uid": "",
@@ -527,14 +532,14 @@ class HomeMateClient:
             },
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
-        )
+        )).payload
         return resp.get("data") or resp.get("dataList") or []
 
     async def control(self, uid: str, device_id: str, order: str, *,
                       value1: int = 0, value2: int = 0, value3: int = 0,
                       value4: int = 0) -> dict[str, Any]:
         """Send a control command (cmd 15)."""
-        return await self._send(
+        return (await self._send(
             CMD_CONTROL,
             {
                 "uid": uid,
@@ -550,7 +555,7 @@ class HomeMateClient:
             },
             protocol_type="dk",
             key=self._session_key,  # type: ignore[arg-type]
-        )
+        )).payload
 
     async def unlock(self, uid: str, device_id: str) -> dict[str, Any]:
         return await self.control(uid, device_id, ORDER_UNLOCK)
