@@ -3,27 +3,12 @@
     "step": {
       "user": {
         "title": "ORVIBO HomeMate",
-        "description": "Choose how to read your lock. Cloud reads ORVIBO's servers with your account. Local runs a server inside Home Assistant that your lock connects to directly (requires a DNS redirect of homemate.orvibo.com to Home Assistant).",
-        "menu_options": {
-          "cloud": "Cloud (ORVIBO account)",
-          "local": "Local server (DNS redirect)"
-        }
-      },
-      "cloud": {
-        "title": "ORVIBO cloud login",
-        "description": "Sign in with the same ORVIBO Home account you use in the app.",
+        "description": "Sign in with the same ORVIBO Home account you use in the app. Home Assistant reads your lock's access log from ORVIBO's server.",
         "data": {
           "username": "Email or phone (ORVIBO account)",
           "password": "Password",
           "host": "Server host",
           "port": "Server port"
-        }
-      },
-      "local": {
-        "title": "ORVIBO local server",
-        "description": "Home Assistant will listen on this port for the lock. Point homemate.orvibo.com at Home Assistant's IP in your DNS (e.g. Technitium), then wake the lock so it connects here.",
-        "data": {
-          "local_port": "Listen port"
         }
       }
     },
@@ -33,7 +18,7 @@
       "unknown": "Unexpected error. Check the Home Assistant logs."
     },
     "abort": {
-      "already_configured": "This ORVIBO setup is already configured."
+      "already_configured": "This ORVIBO account is already set up."
     }
   }
 }

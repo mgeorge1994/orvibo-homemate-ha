@@ -31,8 +31,7 @@ async def async_setup_entry(
             LockBatterySensor(coordinator, lock),
         ])
 
-    # Creates entities for existing locks now, and for any discovered later
-    # (local mode discovers the lock when it first connects).
+    # Create entities for discovered locks.
     coordinator.register_lock_listener(_add)
 
 

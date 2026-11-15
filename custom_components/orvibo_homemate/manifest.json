@@ -1,12 +1,14 @@
 {
   "domain": "orvibo_homemate",
   "name": "ORVIBO HomeMate (S2 Lock Access Log)",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "documentation": "https://github.com/mgeorge1994/orvibo-homemate-ha",
   "issue_tracker": "https://github.com/mgeorge1994/orvibo-homemate-ha/issues",
   "codeowners": [],
   "config_flow": true,
   "iot_class": "cloud_polling",
   "integration_type": "hub",
-  "requirements": ["cryptography>=41.0.0"]
+  "requirements": [
+    "cryptography>=41.0.0"
+  ]
 }

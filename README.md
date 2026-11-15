@@ -33,40 +33,6 @@ For each lock:
 Polls ORVIBO's cloud on an interval (default 60 s), so new entries show up within
 about a minute.
 
-## Two modes
-
-- **Cloud** (default): logs in with your ORVIBO account and reads the records
-  from ORVIBO's servers. Works anywhere, needs no network changes.
-- **Local server** (no ORVIBO cloud): Home Assistant runs a server that your
-  lock connects to directly, after you redirect `homemate.orvibo.com` to HA in
-  your DNS. HA becomes the lock's "cloud"; because it sets the session key it
-  decrypts everything the lock reports. Same pattern as
-  [`ha-aigostar-lan`](https://github.com/RTV4/ha-aigostar-lan), but for ORVIBO's
-  protocol instead of MQTT.
-
-  Because the S2 is a battery lock that sleeps, local mode is **event‑driven**:
-  entries appear when the lock wakes and reports (after each use / periodic
-  check‑in), not on demand. Local mode is **beta** — the lock→server direction
-  isn't fully documented, so enable debug logging and open an issue with any
-  `local <=` lines that don't decode.
-
-### Setting up local mode
-
-1. Add the integration and choose **Local server (DNS redirect)**. HA starts
-   listening on port **10002**.
-2. In your DNS resolver (Technitium, Pi‑hole, AdGuard, …) add an override so
-   **`homemate.orvibo.com` → Home Assistant's IP**. In **Technitium**: *Zones →
-   Add Zone → `homemate.orvibo.com` (Primary) → Add Record → type A, blank name,
-   IP = HA's IP, TTL 60*.
-3. Make sure the lock uses that resolver for DNS (via your router's DHCP).
-4. **Power‑cycle the lock** so it re‑resolves, then wake it. It connects to HA,
-   and the sensors/event entity populate.
-5. Optionally block the lock's internet once it's pairing locally.
-
-> While the override is active, the ORVIBO app and the cloud mode both point at
-> HA too (same hostname) — expected. Remove the override to restore normal cloud
-> use.
-
 ## Install
 
 1. **HACS → Integrations → ⋮ → Custom repositories**, add
