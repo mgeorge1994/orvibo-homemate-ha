@@ -59,9 +59,11 @@ class OrviboHomeMateConfigFlow(ConfigFlow, domain=DOMAIN):
                         "ORVIBO device: name=%r type=%s model=%s deviceId=%s uid=%s",
                         dev.name, dev.device_type, dev.model, dev.device_id, dev.uid,
                     )
-            except HomeMateAuthError:
+            except HomeMateAuthError as err:
+                _LOGGER.error("ORVIBO login rejected: %s", err)
                 errors["base"] = "invalid_auth"
-            except HomeMateError:
+            except HomeMateError as err:
+                _LOGGER.error("ORVIBO connect/handshake failed: %s", err)
                 errors["base"] = "cannot_connect"
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Unexpected error during ORVIBO setup")
