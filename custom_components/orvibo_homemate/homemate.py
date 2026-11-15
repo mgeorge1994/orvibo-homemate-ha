@@ -56,6 +56,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
+import ssl
 import time
 import zlib
 from dataclasses import dataclass, field
@@ -64,6 +66,48 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 _LOGGER = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------
+# Mutual TLS
+# --------------------------------------------------------------------------
+# The ORVIBO server requires the client to present a certificate (mutual TLS)
+# and the app pins the server to ORVIBO's own CA. Both the client keystore
+# (res/raw/client.bks) and the trust store (res/raw/clienttrust.bks) ship in
+# the app with the password "ksund76kN22_wQ"; they are extracted to PEM here.
+# The client certificate is a shared credential embedded in every copy of the
+# public app -- it identifies "the HomeMate app", not an individual user.
+_CERT_DIR = os.path.join(os.path.dirname(__file__), "certs")
+CLIENT_CERT = os.path.join(_CERT_DIR, "client_cert.pem")
+CLIENT_KEY = os.path.join(_CERT_DIR, "client_key.pem")
+SERVER_CA = os.path.join(_CERT_DIR, "server_ca.pem")
+
+
+def build_ssl_context(verify: bool = True) -> ssl.SSLContext:
+    """SSL context mirroring the app: client cert + pinned ORVIBO CA.
+
+    The 2018 ORVIBO cert has no SubjectAltName, so hostname verification is
+    disabled (Python requires a SAN and would reject it); the connection is
+    still authenticated by pinning ORVIBO's CA. Set ``verify=False`` to skip
+    server verification entirely if ORVIBO rotates to a cert this CA no
+    longer covers (the client cert is still sent, which is what the server
+    requires).
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+    ctx.check_hostname = False
+    if verify and os.path.exists(SERVER_CA):
+        ctx.load_verify_locations(cafile=SERVER_CA)
+        ctx.verify_mode = ssl.CERT_REQUIRED
+    else:
+        ctx.verify_mode = ssl.CERT_NONE
+    # ORVIBO's stack negotiates older TLS; allow down to TLS 1.0 for the
+    # legacy endpoint but let OpenSSL pick the best both support.
+    try:
+        ctx.minimum_version = ssl.TLSVersion.TLSv1
+    except (ValueError, AttributeError):
+        pass
+    ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+    return ctx
 
 # --------------------------------------------------------------------------
 # Protocol constants (all extracted from the decompiled app / native lib)
@@ -254,13 +298,17 @@ class HomeMateClient:
 
     def __init__(self, username: str, password: str, *,
                  host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
-                 phone_id: str = "homeassistant-orvibo") -> None:
+                 phone_id: str = "homeassistant-orvibo",
+                 use_tls: bool = True, verify_ssl: bool = False) -> None:
         self._username = username
         # password may be given already-hashed (32 hex chars) or plaintext
         self._md5pw = password.upper() if _looks_md5(password) else md5_password(password)
         self._host = host
         self._port = port
         self._phone_id = phone_id
+        self._use_tls = use_tls
+        self._verify_ssl = verify_ssl
+        self._ssl_ctx = build_ssl_context(verify_ssl) if use_tls else None
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -280,7 +328,9 @@ class HomeMateClient:
     # -- connection lifecycle ------------------------------------------
     async def connect(self) -> None:
         self._reader, self._writer = await asyncio.wait_for(
-            asyncio.open_connection(self._host, self._port), CONNECT_TIMEOUT
+            asyncio.open_connection(self._host, self._port, ssl=self._ssl_ctx,
+                                    server_hostname=self._host if self._ssl_ctx else None),
+            CONNECT_TIMEOUT,
         )
         self._rx_task = asyncio.ensure_future(self._rx_loop())
         await self._request_server_key()

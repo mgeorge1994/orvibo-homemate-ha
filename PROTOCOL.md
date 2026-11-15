@@ -17,7 +17,29 @@ JSON commands over it. The S2 lock is reached through this server session —
 |---|---|
 | Host | `homemate.orvibo.com` (resolved by the app via DNS) |
 | Port | **10002** (TCP, `SO_KEEPALIVE`, `TCP_NODELAY`) — `socket/b.java` |
+| TLS | **Yes — mutual TLS (mTLS)**, see below |
 | LAN discovery | UDP broadcast to `255.255.255.255:10000`, cmd 86 (gateways only) |
+
+### Mutual TLS (required)
+The "server" connection runs over TLS and the client **must present a
+certificate** — the netty pipeline adds an `SslHandler` built from
+`socket/netty/e.java`, which loads **two** BouncyCastle (BKS) keystores from
+the app's resources, both with password `ksund76kN22_wQ`:
+
+- `res/raw/client.bks` → the **client certificate + key** (KeyManager).
+  Subject `CN=*.orvibo.com, O=ORVIBO Technology Co.,Ltd`. This is a shared
+  credential baked into every copy of the app; the server rejects the TLS
+  handshake without it.
+- `res/raw/clienttrust.bks` → the pinned **server CA** (TrustManager),
+  a self-signed `CN=*.orvibo.com` ORVIBO root (valid 2018–2048).
+
+A working client therefore needs to: open TLS to port 10002, send the
+extracted client cert/key, and (optionally) pin ORVIBO's CA. The old cert
+has no SubjectAltName, so hostname verification must be disabled even when
+pinning. The reference client ships the extracted PEMs in
+`custom_components/orvibo_homemate/certs/` and, by default, presents the
+client cert while not verifying the server (so ORVIBO rotating the server
+cert can't block you); pinning can be turned back on in code.
 
 Source: `socket/b.java` connects to `"homemate.orvibo.com"` with
 `int i10 = !str.equals("server") ? a0.B : 10002;`.

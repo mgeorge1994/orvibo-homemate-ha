@@ -107,6 +107,14 @@ logger:
     custom_components.orvibo_homemate: debug
 ```
 
+- **"cannot_connect" / "could not connect to ORVIBO server"** — the server
+  speaks **mutual TLS** on port 10002 and requires ORVIBO's client
+  certificate. This integration ships that cert (extracted from the app) in
+  `certs/` and uses it automatically. If you still can't connect: make sure
+  your HA host has outbound access to `homemate.orvibo.com:10002`, and that
+  the `certs/` folder was copied in. The client presents the cert but does
+  **not** verify the server by default; that's intentional so ORVIBO cert
+  rotation can't block you.
 - **"invalid_auth"** — wrong ORVIBO email/phone or password. The password is
   hashed (MD5, uppercase) before sending, same as the app.
 - **Lock not created** — your lock's `deviceType` isn't in
