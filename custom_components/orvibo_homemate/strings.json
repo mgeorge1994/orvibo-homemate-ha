@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ORVIBO HomeMate",
+        "description": "Sign in with the same ORVIBO Home account you use in the app. Home Assistant will keep a direct session to ORVIBO's server and control your lock over it.",
+        "data": {
+          "username": "Email or phone (ORVIBO account)",
+          "password": "Password",
+          "host": "Server host",
+          "port": "Server port"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Login failed. Check your ORVIBO email/phone and password.",
+      "cannot_connect": "Could not reach the ORVIBO server.",
+      "unknown": "Unexpected error. Check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This ORVIBO account is already set up."
+    }
+  }
+}
