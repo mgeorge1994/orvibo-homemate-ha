@@ -1,7 +1,7 @@
 {
   "domain": "orvibo_homemate",
   "name": "ORVIBO HomeMate (S2 Lock Access Log)",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "documentation": "https://github.com/mgeorge1994/orvibo-homemate-ha",
   "issue_tracker": "https://github.com/mgeorge1994/orvibo-homemate-ha/issues",
   "codeowners": [],

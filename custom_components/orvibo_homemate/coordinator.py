@@ -63,14 +63,6 @@ class HomeMateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
         self._data: dict[str, dict] = {}
         self._lock_listeners: list[Callable[[Device], None]] = []
 
-        if self.mode != MODE_LOCAL:
-            self.client = HomeMateClient(
-                entry.data[CONF_USERNAME],
-                entry.data[CONF_PASSWORD],
-                host=entry.data.get(CONF_HOST),
-                port=entry.data.get(CONF_PORT),
-            )
-
     # -- entity wiring -------------------------------------------------
     def register_lock_listener(self, cb: Callable[[Device], None]) -> None:
         """Platforms call this; cb(lock) is invoked for existing + future locks."""
@@ -93,7 +85,16 @@ class HomeMateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             await self._setup_cloud()
 
     async def _setup_cloud(self) -> None:
-        assert self.client is not None
+        from .homemate import build_ssl_context
+        # Build the TLS context off the event loop (load_cert_chain blocks).
+        ctx = await self.hass.async_add_executor_job(build_ssl_context, False)
+        self.client = HomeMateClient(
+            self.entry.data[CONF_USERNAME],
+            self.entry.data[CONF_PASSWORD],
+            host=self.entry.data.get(CONF_HOST),
+            port=self.entry.data.get(CONF_PORT),
+            ssl_context=ctx,
+        )
         await self.client.connect()
         for dev in await self.client.get_devices():
             _LOGGER.info("ORVIBO device: name=%r type=%s model=%s id=%s",
@@ -104,10 +105,16 @@ class HomeMateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             _LOGGER.warning("No ORVIBO lock found in the account")
 
     async def _setup_local(self) -> None:
-        from .local_server import LocalServer, records_from_payload
+        from .local_server import (
+            LocalServer,
+            build_server_ssl_context,
+            records_from_payload,
+        )
         self._records_from_payload = records_from_payload
         port = self.entry.data.get(CONF_LOCAL_PORT) or LOCAL_LISTEN_PORT
-        self.server = LocalServer("0.0.0.0", port, self._on_local_frame)
+        # Build the TLS context off the event loop (load_cert_chain blocks).
+        ctx = await self.hass.async_add_executor_job(build_server_ssl_context)
+        self.server = LocalServer("0.0.0.0", port, self._on_local_frame, ctx)
         await self.server.start()
         self._primed = True  # local events are live from the first report
         self.async_set_updated_data({})

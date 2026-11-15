@@ -40,8 +40,12 @@ _LOGGER = logging.getLogger(__name__)
 FrameCb = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 
 
-def _server_ssl_context() -> ssl.SSLContext:
-    """TLS server context presenting ORVIBO's cert; accepts any client cert."""
+def build_server_ssl_context() -> ssl.SSLContext:
+    """TLS server context presenting ORVIBO's cert; accepts any client cert.
+
+    Does blocking file I/O (load_cert_chain) — build it in an executor, not the
+    event loop.
+    """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
     ctx.verify_mode = ssl.CERT_NONE
@@ -92,16 +96,17 @@ def records_from_payload(payload: dict[str, Any]) -> list[AccessRecord]:
 class LocalServer:
     """Asyncio TLS server that the lock connects to as its 'cloud'."""
 
-    def __init__(self, host: str, port: int, on_frame: FrameCb) -> None:
+    def __init__(self, host: str, port: int, on_frame: FrameCb,
+                 ssl_context: ssl.SSLContext) -> None:
         self._host = host
         self._port = port
         self._on_frame = on_frame
+        self._ssl_ctx = ssl_context
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
-        ctx = _server_ssl_context()
         self._server = await asyncio.start_server(
-            self._handle_client, self._host, self._port, ssl=ctx,
+            self._handle_client, self._host, self._port, ssl=self._ssl_ctx,
         )
         socks = ", ".join(str(s.getsockname()) for s in (self._server.sockets or []))
         _LOGGER.info("ORVIBO local server listening on %s", socks)

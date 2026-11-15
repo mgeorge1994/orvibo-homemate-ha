@@ -346,7 +346,8 @@ class HomeMateClient:
     def __init__(self, username: str, password: str, *,
                  host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
                  phone_id: str = "homeassistant-orvibo",
-                 use_tls: bool = True, verify_ssl: bool = False) -> None:
+                 use_tls: bool = True, verify_ssl: bool = False,
+                 ssl_context: "ssl.SSLContext | None" = None) -> None:
         self._username = username
         # password may be given already-hashed (32 hex chars) or plaintext
         self._md5pw = password.upper() if _looks_md5(password) else md5_password(password)
@@ -355,7 +356,9 @@ class HomeMateClient:
         self._phone_id = phone_id
         self._use_tls = use_tls
         self._verify_ssl = verify_ssl
-        self._ssl_ctx = build_ssl_context(verify_ssl) if use_tls else None
+        # In Home Assistant, pass a context built in an executor (load_cert_chain
+        # does blocking file I/O). Standalone callers can let it build lazily.
+        self._ssl_ctx = ssl_context
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -378,6 +381,10 @@ class HomeMateClient:
 
     # -- connection lifecycle ------------------------------------------
     async def connect(self) -> None:
+        if self._use_tls and self._ssl_ctx is None:
+            # Lazy build for standalone (non-HA) callers; HA passes a context
+            # built in an executor to avoid blocking the event loop.
+            self._ssl_ctx = build_ssl_context(self._verify_ssl)
         self._reader, self._writer = await asyncio.wait_for(
             asyncio.open_connection(self._host, self._port, ssl=self._ssl_ctx,
                                     server_hostname=self._host if self._ssl_ctx else None),
