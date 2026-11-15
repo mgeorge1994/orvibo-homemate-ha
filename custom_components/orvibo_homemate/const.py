@@ -8,9 +8,18 @@ CONF_PASSWORD = "password"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_MODE = "mode"
+CONF_LOCAL_PORT = "local_port"
+
+MODE_CLOUD = "cloud"
+MODE_LOCAL = "local"
 
 DEFAULT_HOST = "homemate.orvibo.com"
 DEFAULT_PORT = 10002
+
+# Port the lock connects to ("the cloud"). In local mode HA listens here and
+# you point homemate.orvibo.com -> HA's IP in your DNS (e.g. Technitium).
+LOCAL_LISTEN_PORT = 10002
 
 # How often to poll the cloud for new access records (seconds).
 DEFAULT_SCAN_INTERVAL = 60

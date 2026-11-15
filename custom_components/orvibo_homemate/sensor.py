@@ -24,11 +24,16 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: HomeMateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[SensorEntity] = []
-    for device_id, lock in coordinator.locks.items():
-        entities.append(LastAccessSensor(coordinator, lock))
-        entities.append(LockBatterySensor(coordinator, lock))
-    async_add_entities(entities)
+
+    def _add(lock: Device) -> None:
+        async_add_entities([
+            LastAccessSensor(coordinator, lock),
+            LockBatterySensor(coordinator, lock),
+        ])
+
+    # Creates entities for existing locks now, and for any discovered later
+    # (local mode discovers the lock when it first connects).
+    coordinator.register_lock_listener(_add)
 
 
 def _device_info(lock: Device) -> DeviceInfo:

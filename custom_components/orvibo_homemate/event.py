@@ -31,10 +31,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: HomeMateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        AccessEventEntity(coordinator, lock)
-        for lock in coordinator.locks.values()
-    )
+
+    def _add(lock: Device) -> None:
+        async_add_entities([AccessEventEntity(coordinator, lock)])
+
+    coordinator.register_lock_listener(_add)
 
 
 class AccessEventEntity(CoordinatorEntity[HomeMateCoordinator], EventEntity):
